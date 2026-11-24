@@ -1,0 +1,412 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32 GSM Browser Phone</title>
+
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;padding:15px;background:#0b1120;color:white;
+  font-family:Arial,sans-serif;display:flex;justify-content:center
+}
+.phone{
+  width:100%;max-width:410px;background:#172033;
+  padding:16px;border-radius:25px;border:1px solid #334155
+}
+.header{display:flex;justify-content:space-between;align-items:center}
+.header h2{font-size:18px}
+.status{font-size:11px;color:#fbbf24}
+.connect{
+  width:100%;padding:12px;margin:8px 0 13px;
+  background:#2563eb;color:white;border:0;border-radius:10px;
+  font-weight:bold;cursor:pointer
+}
+.section-title{font-size:11px;color:#94a3b8;margin:12px 0 7px}
+.log{
+  height:135px;overflow:auto;background:#050b16;
+  padding:10px;border-radius:10px;color:#86efac;
+  font-size:11px;white-space:pre-wrap;line-height:1.5
+}
+.display{
+  background:#050b16;border:1px solid #334155;
+  border-radius:15px;padding:17px;margin:13px 0
+}
+#number{
+  width:100%;border:0;outline:0;background:none;
+  color:white;text-align:center;font-size:27px
+}
+#callStatus{
+  text-align:center;color:#94a3b8;font-size:11px;margin-top:8px
+}
+.info{
+  display:flex;justify-content:space-between;
+  color:#94a3b8;font-size:11px;margin-top:12px
+}
+.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.key{
+  height:54px;background:#29364c;color:white;
+  border:0;border-radius:12px;font-size:22px;cursor:pointer
+}
+.key:active{background:#475569}
+.pad-controls{
+  display:grid;grid-template-columns:repeat(4,1fr);
+  gap:7px;margin-top:9px
+}
+.control{
+  padding:13px 3px;border:0;border-radius:10px;
+  color:white;font-weight:bold;font-size:12px;cursor:pointer
+}
+.delete{background:#475569}
+.clear{background:#64748b}
+.send{background:#2563eb}
+.reply{background:#7c3aed}
+.actions{
+  display:grid;grid-template-columns:1fr 1fr;
+  gap:8px;margin-top:12px
+}
+.action{
+  padding:13px;border:0;border-radius:20px;
+  color:white;font-weight:bold;cursor:pointer
+}
+.call{background:#16a34a}
+.end{background:#dc2626}
+.answer{background:#2563eb}
+.reject{background:#b45309}
+.tools{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tool{
+  background:#334155;color:white;border:0;
+  padding:11px;border-radius:9px;cursor:pointer
+}
+</style>
+</head>
+
+<body>
+<div class="phone">
+
+  <div class="header">
+    <h2>📱 GSM Browser Phone</h2>
+    <span class="status" id="connection">OFFLINE</span>
+  </div>
+
+  <button class="connect" id="connectBtn" onclick="connectSerial()">
+    CONNECT ESP32
+  </button>
+
+  <!-- SYSTEM LOG TOP -->
+  <div class="section-title">SYSTEM LOG</div>
+  <div class="log" id="log">GSM Browser Phone Ready...</div>
+
+  <!-- DISPLAY -->
+  <div class="display">
+    <input id="number" type="text"
+      placeholder="Phone Number / USSD"
+      autocomplete="off">
+    <div id="callStatus">Ready</div>
+    <div class="info">
+      <span id="network">Network: --</span>
+      <span id="signal">Signal: --</span>
+    </div>
+  </div>
+
+  <!-- DIAL PAD -->
+  <div class="pad">
+    <button class="key" onclick="addKey('1')">1</button>
+    <button class="key" onclick="addKey('2')">2</button>
+    <button class="key" onclick="addKey('3')">3</button>
+    <button class="key" onclick="addKey('4')">4</button>
+    <button class="key" onclick="addKey('5')">5</button>
+    <button class="key" onclick="addKey('6')">6</button>
+    <button class="key" onclick="addKey('7')">7</button>
+    <button class="key" onclick="addKey('8')">8</button>
+    <button class="key" onclick="addKey('9')">9</button>
+    <button class="key" onclick="addKey('*')">*</button>
+    <button class="key" onclick="addKey('0')">0</button>
+    <button class="key" onclick="addKey('#')">#</button>
+  </div>
+
+  <!-- SEND AND REPLY -->
+  <div class="pad-controls">
+    <button class="control delete" onclick="backspace()">⌫ DELETE</button>
+    <button class="control clear" onclick="clearNumber()">CLEAR</button>
+    <button class="control send" onclick="sendUSSD()">SEND</button>
+    <button class="control reply" onclick="replyUSSD()">REPLY</button>
+  </div>
+
+  <!-- CALL CONTROL -->
+  <div class="actions">
+    <button class="action call" onclick="makeCall()">📞 CALL</button>
+    <button class="action end" onclick="endCall()">✖ END</button>
+    <button class="action answer" onclick="answerCall()">ANSWER</button>
+    <button class="action reject" onclick="rejectCall()">REJECT</button>
+  </div>
+
+  <!-- MODEM CONTROL -->
+  <div class="section-title">MODEM CONTROL</div>
+  <div class="tools">
+    <button class="tool" onclick="sendAT('AT')">CHECK MODEM</button>
+    <button class="tool" onclick="sendAT('AT+CSQ')">SIGNAL</button>
+    <button class="tool" onclick="sendAT('AT+CREG?')">NETWORK</button>
+    <button class="tool" onclick="sendAT('AT+COPS?')">OPERATOR</button>
+  </div>
+
+</div>
+
+<script>
+let port = null;
+let reader = null;
+let writer = null;
+let ussdSessionActive = false;
+let readRunning = false;
+
+const number = document.getElementById("number");
+const logBox = document.getElementById("log");
+
+function log(message){
+  logBox.textContent += "\n" + message;
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+function setStatus(message){
+  document.getElementById("callStatus").textContent = message;
+}
+
+function addKey(key){
+  number.value += key;
+}
+
+function backspace(){
+  number.value = number.value.slice(0,-1);
+}
+
+function clearNumber(){
+  number.value = "";
+}
+
+// CONNECT ESP32
+async function connectSerial(){
+  try{
+    if(!("serial" in navigator)){
+      alert("Use Chrome or Edge browser.");
+      return;
+    }
+
+    port = await navigator.serial.requestPort();
+    await port.open({baudRate:115200});
+
+    writer = port.writable.getWriter();
+
+    document.getElementById("connection").textContent="CONNECTED";
+    document.getElementById("connection").style.color="#4ade80";
+    document.getElementById("connectBtn").textContent="ESP32 CONNECTED";
+
+    log("ESP32 Connected Successfully");
+
+    if(!readRunning){
+      readRunning = true;
+      readSerial();
+    }
+
+  }catch(error){
+    log("Connection Error: " + error.message);
+  }
+}
+
+// SERIAL RECEIVE
+async function readSerial(){
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while(port && port.readable){
+    reader = port.readable.getReader();
+
+    try{
+      while(true){
+        const {value,done} = await reader.read();
+        if(done) break;
+
+        buffer += decoder.decode(value,{stream:true});
+
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop();
+
+        for(const line of lines){
+          if(line.trim()) processResponse(line.trim());
+        }
+      }
+    }catch(error){
+      log("Read Error: " + error.message);
+      break;
+    }finally{
+      reader.releaseLock();
+      reader = null;
+    }
+  }
+
+  readRunning = false;
+}
+
+// SEND AT COMMAND
+async function sendAT(command){
+  if(!writer){
+    log("Connect ESP32 First!");
+    return false;
+  }
+
+  try{
+    await writer.write(
+      new TextEncoder().encode(command + "\r\n")
+    );
+    log(">> " + command);
+    return true;
+  }catch(error){
+    log("Send Error: " + error.message);
+    return false;
+  }
+}
+
+// NEW USSD SESSION
+async function sendUSSD(){
+  const code = number.value.trim();
+
+  if(!/^\*[0-9*]+#$/.test(code)){
+    alert("Example: *247# or *566#");
+    return;
+  }
+
+  if(!writer){
+    alert("Connect ESP32 First!");
+    return;
+  }
+
+  setStatus("Starting USSD Session...");
+  ussdSessionActive = false;
+
+  // Close any previous session
+  const closed = await sendAT("AT+CUSD=2");
+  if(!closed) return;
+
+  // Start new session separately
+  setTimeout(async()=>{
+    await sendAT('AT+CUSD=1,"' + code + '",15');
+  },700);
+}
+
+// REPLY TO CURRENT USSD MENU
+async function replyUSSD(){
+  const answer = number.value.trim();
+
+  if(!/^[0-9*#]+$/.test(answer)){
+    alert("Enter a menu option, e.g. 5 or 1");
+    return;
+  }
+
+  if(!ussdSessionActive){
+    alert("No active USSD session. Start with *247# first.");
+    return;
+  }
+
+  setStatus("Sending USSD Menu Reply...");
+
+  await sendAT('AT+CUSD=1,"' + answer + '",15');
+}
+
+// MODEM RESPONSE
+function processResponse(line){
+  log("<< " + line);
+
+  if(line.includes("+CSQ:")){
+    const match=line.match(/\+CSQ:\s*(\d+)/);
+    if(match){
+      document.getElementById("signal").textContent =
+        "Signal: " + match[1] + "/31";
+    }
+  }
+
+  if(line.includes("+CREG:")){
+    document.getElementById("network").textContent =
+      "Network: " + line;
+  }
+
+  if(line.includes("+COPS:")){
+    document.getElementById("network").textContent =
+      "Network: " + line;
+  }
+
+  if(line === "RING"){
+    setStatus("Incoming Call...");
+  }
+
+  if(line.includes("+CLIP:")){
+    setStatus("Incoming: " + line);
+  }
+
+  if(line.includes("+CUSD:")){
+    const activeMatch = line.match(/^\+CUSD:\s*(\d+)/);
+
+    if(activeMatch){
+      const sessionState = Number(activeMatch[1]);
+
+      if(sessionState === 1){
+        ussdSessionActive = true;
+        setStatus("USSD Menu Active - Enter Reply");
+      }else{
+        ussdSessionActive = false;
+        setStatus("USSD Session Ended");
+      }
+    }
+  }
+
+  if(line === "NO CARRIER"){
+    setStatus("Call Ended");
+  }
+
+  if(line === "BUSY"){
+    setStatus("Line Busy");
+  }
+
+  if(line.includes("+CME ERROR")){
+    setStatus("Modem Error");
+  }
+
+  if(line === "Call Ready"){
+    setStatus("Modem Ready");
+  }
+}
+
+// CALL
+async function makeCall(){
+  const n=number.value.trim();
+
+  if(!/^[0-9+]+$/.test(n)){
+    alert("Enter a valid phone number.");
+    return;
+  }
+
+  setStatus("Calling " + n + "...");
+  await sendAT("ATD" + n + ";");
+}
+
+// END CALL
+async function endCall(){
+  await sendAT("ATH");
+  setStatus("Call Ended");
+}
+
+// ANSWER
+async function answerCall(){
+  await sendAT("ATA");
+  setStatus("Answering...");
+}
+
+// REJECT
+async function rejectCall(){
+  await sendAT("ATH");
+  setStatus("Call Rejected");
+}
+</script>
+
+</body>
+</html>
